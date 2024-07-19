@@ -19,3 +19,9 @@ Make sure you have Python 3.x installed. You also need to install the required p
 
 ```bash
 pip install pandas numpy PyQt5 scikit-learn scipy
+Clone the repository:
+git clone https://github.com/grurill/Pineapple
+cd featureengeniering
+Run the application
+python featureEngineering.py
+
