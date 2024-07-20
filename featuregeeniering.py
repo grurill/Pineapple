@@ -5,10 +5,13 @@ from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QP
                              QFileDialog, QComboBox, QListWidget, QLineEdit, QTabWidget, QTextEdit, 
                              QMessageBox, QCheckBox, QSpinBox, QGroupBox)
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QFont
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, LabelEncoder, OneHotEncoder
 from scipy import stats
-from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.feature_selection import SelectKBest, f_classif, mutual_info_classif
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 class FeatureEngineeringApp(QWidget):
     def __init__(self):
@@ -42,6 +45,8 @@ class FeatureEngineeringApp(QWidget):
         self.tabs.addTab(self.create_binning_tab(), "Binning")
         self.tabs.addTab(self.create_transformation_tab(), "Transformation")
         self.tabs.addTab(self.create_feature_selection_tab(), "Feature Selection")
+        self.tabs.addTab(self.create_visualization_tab(), "Visualization")
+        self.tabs.addTab(self.create_outlier_detection_tab(), "Outliers")
         right_panel.addWidget(self.tabs)
 
         # Apply and Save buttons
@@ -69,7 +74,7 @@ class FeatureEngineeringApp(QWidget):
         layout = QVBoxLayout()
 
         self.missing_strategy = QComboBox()
-        self.missing_strategy.addItems(['Drop', 'Fill with Mean', 'Fill with Median', 'Fill with Mode', 'Fill with Value'])
+        self.missing_strategy.addItems(['Drop', 'Fill with Mean', 'Fill with Median', 'Fill with Mode', 'Fill with Value', 'Fill with Most Frequent'])
         layout.addWidget(QLabel('Strategy:'))
         layout.addWidget(self.missing_strategy)
 
@@ -143,11 +148,59 @@ class FeatureEngineeringApp(QWidget):
         layout.addWidget(QLabel('Target Column:'))
         layout.addWidget(self.target_column)
 
+        self.feature_selection_strategy = QComboBox()
+        self.feature_selection_strategy.addItems(['SelectKBest (f_classif)', 'SelectKBest (mutual_info_classif)'])
+        layout.addWidget(QLabel('Feature Selection Method:'))
+        layout.addWidget(self.feature_selection_strategy)
+
         self.k_best_features = QSpinBox()
         self.k_best_features.setRange(1, 100)
         self.k_best_features.setValue(10)
         layout.addWidget(QLabel('Number of Best Features:'))
         layout.addWidget(self.k_best_features)
+
+        tab.setLayout(layout)
+        return tab
+
+    def create_visualization_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout()
+
+        self.visualization_type = QComboBox()
+        self.visualization_type.addItems(['Histogram', 'Scatter Plot'])
+        layout.addWidget(QLabel('Visualization Type:'))
+        layout.addWidget(self.visualization_type)
+
+        self.x_column = QLineEdit()
+        self.x_column.setPlaceholderText('X-axis Column (for Scatter Plot)')
+        layout.addWidget(QLabel('X-axis Column:'))
+        layout.addWidget(self.x_column)
+
+        self.y_column = QLineEdit()
+        self.y_column.setPlaceholderText('Y-axis Column (for Scatter Plot)')
+        layout.addWidget(QLabel('Y-axis Column:'))
+        layout.addWidget(self.y_column)
+
+        self.plot_button = QPushButton('Plot')
+        self.plot_button.clicked.connect(self.plot_data)
+        layout.addWidget(self.plot_button)
+
+        tab.setLayout(layout)
+        return tab
+
+    def create_outlier_detection_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout()
+
+        self.outlier_strategy = QComboBox()
+        self.outlier_strategy.addItems(['Z-Score', 'IQR'])
+        layout.addWidget(QLabel('Outlier Detection Method:'))
+        layout.addWidget(self.outlier_strategy)
+
+        self.outlier_threshold = QLineEdit()
+        self.outlier_threshold.setPlaceholderText('Threshold (e.g., 3 for Z-Score, 1.5 for IQR)')
+        layout.addWidget(QLabel('Outlier Threshold:'))
+        layout.addWidget(self.outlier_threshold)
 
         tab.setLayout(layout)
         return tab
@@ -191,94 +244,128 @@ class FeatureEngineeringApp(QWidget):
             self.handle_transformation(selected_columns)
         elif current_tab == self.tabs.widget(5):  # Feature Selection
             self.handle_feature_selection()
+        elif current_tab == self.tabs.widget(6):  # Visualization
+            self.plot_data()
+        elif current_tab == self.tabs.widget(7):  # Outliers
+            self.handle_outliers(selected_columns)
 
         self.update_preview()
 
-    def handle_missing_values(self, columns):
+    def handle_missing_values(self, selected_columns):
         strategy = self.missing_strategy.currentText()
         if strategy == 'Drop':
-            self.df.dropna(subset=columns, inplace=True)
-        elif strategy == 'Fill with Mean':
-            imputer = SimpleImputer(strategy='mean')
-            self.df[columns] = imputer.fit_transform(self.df[columns])
-        elif strategy == 'Fill with Median':
-            imputer = SimpleImputer(strategy='median')
-            self.df[columns] = imputer.fit_transform(self.df[columns])
-        elif strategy == 'Fill with Mode':
-            imputer = SimpleImputer(strategy='most_frequent')
-            self.df[columns] = imputer.fit_transform(self.df[columns])
+            self.df.dropna(subset=selected_columns, inplace=True)
+        elif strategy in ['Fill with Mean', 'Fill with Median', 'Fill with Mode', 'Fill with Most Frequent']:
+            fill_value = None
+            if strategy == 'Fill with Mean':
+                fill_value = self.df[selected_columns].mean()
+            elif strategy == 'Fill with Median':
+                fill_value = self.df[selected_columns].median()
+            elif strategy == 'Fill with Mode':
+                fill_value = self.df[selected_columns].mode().iloc[0]
+            elif strategy == 'Fill with Most Frequent':
+                fill_value = SimpleImputer(strategy='most_frequent')
+                self.df[selected_columns] = fill_value.fit_transform(self.df[selected_columns])
+            self.df[selected_columns] = self.df[selected_columns].fillna(fill_value)
         elif strategy == 'Fill with Value':
             fill_value = self.fill_value.text()
-            self.df[columns] = self.df[columns].fillna(fill_value)
+            self.df[selected_columns] = self.df[selected_columns].fillna(fill_value)
 
-    def handle_encoding(self, columns):
+    def handle_encoding(self, selected_columns):
         strategy = self.encoding_strategy.currentText()
         if strategy == 'Label Encoding':
-            le = LabelEncoder()
-            for col in columns:
-                if self.df[col].dtype == 'object':
-                    self.df[col] = le.fit_transform(self.df[col].astype(str))
+            encoder = LabelEncoder()
+            for col in selected_columns:
+                self.df[col] = encoder.fit_transform(self.df[col])
         elif strategy == 'One-Hot Encoding':
-            self.df = pd.get_dummies(self.df, columns=columns)
-            self.update_column_list()
+            self.df = pd.get_dummies(self.df, columns=selected_columns)
 
-    def handle_scaling(self, columns):
+    def handle_scaling(self, selected_columns):
         strategy = self.scaling_strategy.currentText()
         if strategy == 'StandardScaler':
             scaler = StandardScaler()
         elif strategy == 'MinMaxScaler':
             scaler = MinMaxScaler()
-        
-        self.df[columns] = scaler.fit_transform(self.df[columns])
+        self.df[selected_columns] = scaler.fit_transform(self.df[selected_columns])
 
-    def handle_binning(self, columns):
+    def handle_binning(self, selected_columns):
         strategy = self.bin_strategy.currentText()
-        n_bins = self.num_bins.value()
-        
-        for col in columns:
-            if pd.api.types.is_numeric_dtype(self.df[col]):
-                if strategy == 'Equal Width':
-                    self.df[f'{col}_binned'] = pd.cut(self.df[col], bins=n_bins)
-                elif strategy == 'Equal Frequency':
-                    self.df[f'{col}_binned'] = pd.qcut(self.df[col], q=n_bins)
-        
-        self.update_column_list()
+        num_bins = self.num_bins.value()
+        for col in selected_columns:
+            if strategy == 'Equal Width':
+                self.df[col+'_binned'] = pd.cut(self.df[col], bins=num_bins)
+            elif strategy == 'Equal Frequency':
+                self.df[col+'_binned'] = pd.qcut(self.df[col], q=num_bins)
 
-    def handle_transformation(self, columns):
+    def handle_transformation(self, selected_columns):
         strategy = self.transform_strategy.currentText()
-        for col in columns:
-            if pd.api.types.is_numeric_dtype(self.df[col]):
-                if strategy == 'Log':
-                    self.df[f'{col}_log'] = np.log1p(self.df[col])
-                elif strategy == 'Square Root':
-                    self.df[f'{col}_sqrt'] = np.sqrt(self.df[col])
-                elif strategy == 'Box-Cox':
-                    self.df[f'{col}_boxcox'], _ = stats.boxcox(self.df[col] + 1)
-
-        self.update_column_list()
+        for col in selected_columns:
+            if strategy == 'Log':
+                self.df[col] = np.log1p(self.df[col])
+            elif strategy == 'Square Root':
+                self.df[col] = np.sqrt(self.df[col])
+            elif strategy == 'Box-Cox':
+                self.df[col], _ = stats.boxcox(self.df[col] + 1)
 
     def handle_feature_selection(self):
-        target_col = self.target_column.text()
-        if target_col not in self.df.columns:
-            QMessageBox.warning(self, 'Invalid Target Column', 'Please provide a valid target column.')
+        target = self.target_column.text()
+        if target not in self.df.columns:
+            QMessageBox.warning(self, 'Invalid Target', 'The target column does not exist in the dataset.')
             return
+
+        strategy = self.feature_selection_strategy.currentText()
+        k = self.k_best_features.value()
+        X = self.df.drop(columns=[target])
+        y = self.df[target]
         
-        X = self.df.drop(columns=[target_col])
-        y = self.df[target_col]
-        selector = SelectKBest(score_func=f_classif, k=self.k_best_features.value())
+        if strategy == 'SelectKBest (f_classif)':
+            selector = SelectKBest(score_func=f_classif, k=k)
+        elif strategy == 'SelectKBest (mutual_info_classif)':
+            selector = SelectKBest(score_func=mutual_info_classif, k=k)
+        
         selector.fit(X, y)
-        
         selected_features = X.columns[selector.get_support()]
-        self.df = self.df[selected_features.to_list() + [target_col]]
-        self.update_column_list()
+        self.df = self.df[selected_features.tolist() + [target]]
+
+    def handle_outliers(self, selected_columns):
+        strategy = self.outlier_strategy.currentText()
+        threshold = float(self.outlier_threshold.text())
+        for col in selected_columns:
+            if strategy == 'Z-Score':
+                z_scores = np.abs(stats.zscore(self.df[col]))
+                self.df = self.df[z_scores < threshold]
+            elif strategy == 'IQR':
+                Q1 = self.df[col].quantile(0.25)
+                Q3 = self.df[col].quantile(0.75)
+                IQR = Q3 - Q1
+                self.df = self.df[~((self.df[col] < (Q1 - threshold * IQR)) | (self.df[col] > (Q3 + threshold * IQR)))]
+
+    def plot_data(self):
+        if self.df is None:
+            QMessageBox.warning(self, 'No Data', 'Please load a CSV file first.')
+            return
+
+        plot_type = self.visualization_type.currentText()
+        if plot_type == 'Histogram':
+            self.df.hist(figsize=(10, 10))
+        elif plot_type == 'Scatter Plot':
+            x_col = self.x_column.text()
+            y_col = self.y_column.text()
+            if x_col not in self.df.columns or y_col not in self.df.columns:
+                QMessageBox.warning(self, 'Invalid Columns', 'The specified columns do not exist in the dataset.')
+                return
+            self.df.plot(kind='scatter', x=x_col, y=y_col)
+
+        plt.show()
 
     def save_csv(self):
-        if self.df is not None:
-            file_name, _ = QFileDialog.getSaveFileName(self, 'Save CSV', '', 'CSV files (*.csv)')
-            if file_name:
-                self.df.to_csv(file_name, index=False)
-        else:
-            QMessageBox.warning(self, 'No Data', 'No data to save. Please load and process a CSV file first.')
+        if self.df is None:
+            QMessageBox.warning(self, 'No Data', 'Please load a CSV file first.')
+            return
+
+        file_name, _ = QFileDialog.getSaveFileName(self, 'Save CSV', '', 'CSV files (*.csv)')
+        if file_name:
+            self.df.to_csv(file_name, index=False)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
